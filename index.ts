@@ -32,6 +32,19 @@ app.get('/', (req,res) => {
   })
 });
 
+function authenticateToken(req: any, res: any, next: any) {
+  const authHeader = req.headers['authorization']
+  const token = authHeader && authHeader.split(' ')[1]
+  if (token == null) return res.sendStatus(401)
+
+  jwt.verify(token, accessTokenSecret, (err: any, user: any) => {
+    console.log(err)
+    if (err) return res.sendStatus(403)
+    req.user = user
+    next() // pass the execution off to whatever request the client intended
+  })
+}
+
 app.post('/signup', async(req, res) => {
   const { username, password } = req.body;
   let queryResult = await client.query(`SELECT * FROM users WHERE USERNAME = $$${username}$$;`);
@@ -52,17 +65,39 @@ app.post('/signup', async(req, res) => {
 
 app.post('/login', async(req, res) => {
   const { username, password } = req.body;
-  let queryResult = await client.query(`SELECT password, username FROM users WHERE USERNAME = $$${username}$$;`);
+  let queryResult = await client.query(`SELECT password, username, id FROM users WHERE USERNAME = $$${username}$$;`);
   let foundHashedPassword = queryResult.rows[0].password;
   bcrypt.compare(password, foundHashedPassword)
     .then((result) => {
       if (result) {
-        const accessToken = jwt.sign({ username: queryResult.rows[0].username }, accessTokenSecret);
+        let {username, id} = queryResult.rows[0]
+        const accessToken = jwt.sign({ id: id, username: username }, accessTokenSecret);
         res.json({accessToken});
       } else {
         res.json({message: "Username or password doesn't match"});
       }
     });
+});
+
+app.post('/files', authenticateToken, async(req, res) => {
+  if (!req.headers['authorization']) return;
+  console.log("bye", req.headers['authorization'].split(" ")[1]);
+  let token = req.headers['authorization'].split(" ")[1];
+  let decoded = jwt.verify(token, accessTokenSecret);
+  let {id} = (decoded as any);
+  const { new_file } = req.body;
+  const query = {
+    text: "INSERT INTO files(user_id, content) VALUES($1, $2)",
+    values: [id, new_file]
+  };
+  await client.query(query);
+  let queryResult = await client.query(`
+    SELECT username, content 
+    FROM files 
+    JOIN users ON users.id = files.user_id WHERE users.id = ${id};`
+  );
+  console.log(queryResult.rows)
+  res.json({post: new_file, queryResult: queryResult})
 });
 
 
